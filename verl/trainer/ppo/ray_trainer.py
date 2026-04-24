@@ -1270,8 +1270,19 @@ class RayPPOTrainer(object):
                         metrics.update(actor_output_metrics)
 
                     # validate
-                    if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and \
-                        (is_last_step or  self.global_steps % self.config.trainer.test_freq == 0):
+                    test_start_step = self.config.trainer.get('test_start_step', 0)
+                    should_validate = (
+                        self.val_reward_fn is not None and
+                        self.config.trainer.test_freq > 0 and
+                        (
+                            is_last_step or
+                            (
+                                self.global_steps >= test_start_step and
+                                self.global_steps % self.config.trainer.test_freq == 0
+                            )
+                        )
+                    )
+                    if should_validate:
                         with _timer('testing', timing_raw):
                             val_metrics: dict = self._validate()
                             if is_last_step:

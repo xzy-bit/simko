@@ -33,6 +33,7 @@ actor_rollout_ref:
     ppo_max_token_len_per_gpu: 16384 # n * ${data.max_prompt_length} + ${data.max_response_length}
     grad_clip: 1.0
     simko: False
+    simko_ts2: False
     mix_topk_coef: 0.01
     top_k: 1
     tau: 1.0
@@ -186,6 +187,7 @@ trainer:
   resume_mode: auto # or auto or resume_path if 
   resume_from_path: False
   test_freq: -1
+  test_start_step: 0
   critic_warmup: 0
   default_hdfs_dir: null
   remove_previous_ckpt_in_save: False

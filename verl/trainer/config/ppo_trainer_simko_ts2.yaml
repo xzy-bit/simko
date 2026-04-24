@@ -1,0 +1,9 @@
+defaults:
+  - _self_
+  - ppo_trainer
+
+actor_rollout_ref:
+  actor:
+    simko: True
+    simko_ts2: True
+    top_k: 9

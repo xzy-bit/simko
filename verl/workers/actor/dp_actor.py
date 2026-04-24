@@ -134,19 +134,8 @@ class DataParallelPPOActor(BasePPOActor):
 
                 if simko:
                     topk_idx_rmpad = torch.topk(logits_rmpad.detach(), k=top_k, dim=-1).indices   # (total_nnz, K)
-
-    
-                    total_nnz, vocab_size = logits_rmpad.shape
-                    K = topk_idx_rmpad.size(-1)
-
-                    logits_exp = logits_rmpad.unsqueeze(1).expand(total_nnz, K, vocab_size).reshape(total_nnz*K, vocab_size)  # (N*K, V)
-                    labels_exp = topk_idx_rmpad.reshape(total_nnz*K)                                                          # (N*K,)
-
-           
-                    topk_logp_flat = logprobs_from_logits(logits_exp, labels_exp)   # (N*K,)
-
-                 
-                    topk_logp_rmpad = topk_logp_flat.view(total_nnz, K)             # (total_nnz, K)
+                    log_probs_rmpad_all = torch.log_softmax(logits_rmpad, dim=-1)                 # (total_nnz, V)
+                    topk_logp_rmpad = log_probs_rmpad_all.gather(-1, topk_idx_rmpad)              # (total_nnz, K)
 
                 # gather log_prob if sp > 1
                 if self.use_ulysses_sp:
@@ -207,19 +196,9 @@ class DataParallelPPOActor(BasePPOActor):
                 max_token = (predicted_tokens == micro_batch['responses']).float()  # (bsz, response_length)
                 if simko and top_k > 0:
                     # logits: (bs, Tresp, V)
-                    B, T, V = logits.shape
                     topk_idx = torch.topk(logits.detach(), k=top_k, dim=-1).indices                   # (B, T, K)
-                    K = topk_idx.size(-1)
-
-                    logits_2d = logits.reshape(B*T, V)                                                # (N, V)
-                    topk_idx_2d = topk_idx.reshape(B*T, K)                                            # (N, K)
-                    logits_exp = logits_2d.unsqueeze(1).expand(B*T, K, V).reshape(B*T*K, V)           # (N*K, V)
-                    labels_exp = topk_idx_2d.reshape(B*T*K)                                           # (N*K,)
-
-        
-                    topk_logp_flat = logprobs_from_logits(logits_exp, labels_exp)                     # (N*K,)
-
-                    topk_log_probs = topk_logp_flat.view(B, T, K)   
+                    log_probs_all = torch.log_softmax(logits, dim=-1)                                 # (B, T, V)
+                    topk_log_probs = log_probs_all.gather(-1, topk_idx)                               # (B, T, K)
             if simko:                                  # (bs, response_len, K)
                 return entropy, log_probs, max_token, topk_log_probs
             return entropy, log_probs
@@ -389,19 +368,37 @@ class DataParallelPPOActor(BasePPOActor):
                     if self.config.simko:
                         old_log_probs_topk=data['old_log_probs_topk']
                         entropy = entropy.detach()
-                        pg_loss, pg_clipfrac, ppo_kl = core_algos.compute_policy_loss_simko(old_log_prob=old_log_prob,
-                                                                                    old_log_probs_topk=old_log_probs_topk,
-                                                                                    log_prob=log_prob,
-                                                                                    topk_log_probs=topk_log_probs,
-                                                                                    entropy=entropy,
-                                                                                    advantages=advantages,
-                                                                                    eos_mask=response_mask,
-                                                                                    cliprange=clip_ratio,
-                                                                                    token_level_scores=token_level_scores,
-                                                                                    max_token=max_token,
-                                                                                    mix_topk_coef=self.config.mix_topk_coef,
-                                                                                    tau=self.config.tau,
-                                                                                    )
+                        simko_ts2 = self.config.get("simko_ts2", False)
+                        if simko_ts2:
+                            pg_loss, pg_clipfrac, ppo_kl = core_algos.compute_policy_loss_simko_ts2(
+                                old_log_prob=old_log_prob,
+                                old_log_probs_topk=old_log_probs_topk,
+                                log_prob=log_prob,
+                                topk_log_probs=topk_log_probs,
+                                entropy=entropy,
+                                advantages=advantages,
+                                eos_mask=response_mask,
+                                cliprange=clip_ratio,
+                                token_level_scores=token_level_scores,
+                                max_token=max_token,
+                                mix_topk_coef=self.config.mix_topk_coef,
+                                tau=self.config.tau,
+                            )
+                        else:
+                            pg_loss, pg_clipfrac, ppo_kl = core_algos.compute_policy_loss_simko(
+                                old_log_prob=old_log_prob,
+                                old_log_probs_topk=old_log_probs_topk,
+                                log_prob=log_prob,
+                                topk_log_probs=topk_log_probs,
+                                entropy=entropy,
+                                advantages=advantages,
+                                eos_mask=response_mask,
+                                cliprange=clip_ratio,
+                                token_level_scores=token_level_scores,
+                                max_token=max_token,
+                                mix_topk_coef=self.config.mix_topk_coef,
+                                tau=self.config.tau,
+                            )
                     else:
                         pg_loss, pg_clipfrac, ppo_kl = core_algos.compute_policy_loss(old_log_prob=old_log_prob,
                                                                                     log_prob=log_prob,
