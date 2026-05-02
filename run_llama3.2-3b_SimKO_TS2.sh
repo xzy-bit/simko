@@ -23,7 +23,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.path=$model_name \
     actor_rollout_ref.actor.simko=True \
     actor_rollout_ref.actor.simko_ts2=True \
-    actor_rollout_ref.actor.top_k=9 \
+    actor_rollout_ref.actor.top_k=10 \
     actor_rollout_ref.actor.tau=0.8 \
     actor_rollout_ref.actor.mix_topk_coef=0.01 \
     actor_rollout_ref.actor.optim.lr=$lr \
@@ -53,7 +53,8 @@ python3 -m verl.trainer.main_ppo \
     trainer.n_gpus_per_node=8 \
     +trainer.val_before_train=False \
     trainer.nnodes=1 \
-    trainer.save_freq=32 \
-    trainer.test_freq=10 \
+    trainer.save_freq=8 \
+    trainer.save_start_step=100 \
+    trainer.test_freq=8 \
     trainer.test_start_step=100 \
     trainer.total_epochs=20 $@

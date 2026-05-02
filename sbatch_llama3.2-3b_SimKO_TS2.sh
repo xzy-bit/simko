@@ -29,7 +29,7 @@ export HF_HOME="${HF_HOME:-/scratch/prj0000000224/hf_cache}"
 export TOKENIZERS_PARALLELISM=false
 
 mkdir -p logs "$WANDB_DIR" "$WANDB_CACHE_DIR"
-mkdir -p /scratch/prj0000000224/models/MATH-Llama-3.2-3B-SimKO-TS2-Rerun
+mkdir -p /scratch/prj0000000224/models/MATH-Llama-3.2-3B-SimKO-TS2-0429
 
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node: $(hostname)"
@@ -39,7 +39,7 @@ echo "HF_HOME=${HF_HOME}"
 nvidia-smi
 
 bash run_llama3.2-3b_SimKO_TS2.sh \
-  trainer.default_local_dir=/scratch/prj0000000224/models/MATH-Llama-3.2-3B-SimKO-TS2-Rerun \
-  trainer.experiment_name="MATH-Llama-3.2-3B-SimKO-TS2-Rerun" \
+  trainer.default_local_dir=/scratch/prj0000000224/models/MATH-Llama-3.2-3B-SimKO-TS2-0429 \
+  trainer.experiment_name="MATH-Llama-3.2-3B-SimKO-TS2-0429" \
   trainer.remove_previous_ckpt_in_save=True \
   "$@"

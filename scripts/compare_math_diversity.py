@@ -14,6 +14,7 @@ from typing import Iterable
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
+from tqdm import tqdm
 
 
 DEFAULT_SPECS = {
@@ -74,10 +75,13 @@ def is_correct(record: dict) -> bool:
     return False
 
 
-def load_samples(path: str, group_key: str) -> dict[int, list[Sample]]:
+def load_samples(path: str, group_key: str, show_progress: bool) -> dict[int, list[Sample]]:
     grouped = defaultdict(list)
     with open(path) as f:
-        for line_no, line in enumerate(f, start=1):
+        for line_no, line in enumerate(
+            tqdm(f, desc=f"Loading {os.path.basename(path)}", dynamic_ncols=True, disable=not show_progress),
+            start=1,
+        ):
             line = line.strip()
             if not line:
                 continue
@@ -191,13 +195,13 @@ def cosine_distance_mean(embeddings: np.ndarray) -> float:
     return upper_triangle_mean(dist)
 
 
-def embed_texts(model: SentenceTransformer, texts: list[str], batch_size: int) -> np.ndarray:
+def embed_texts(model: SentenceTransformer, texts: list[str], batch_size: int, show_progress: bool) -> np.ndarray:
     return model.encode(
         texts,
         batch_size=batch_size,
         convert_to_numpy=True,
         normalize_embeddings=False,
-        show_progress_bar=False,
+        show_progress_bar=show_progress,
     )
 
 
@@ -216,14 +220,15 @@ def analyze_one(
     max_bleu_pairs: int,
     bleu_seed: int,
     group_key: str,
+    show_progress: bool,
 ) -> dict[str, float | int | str]:
-    grouped = load_samples(path, group_key=group_key)
+    grouped = load_samples(path, group_key=group_key, show_progress=show_progress)
     if not grouped:
         raise ValueError(f"No samples found in {path}")
 
     all_samples = [sample for rows in grouped.values() for sample in rows]
     all_responses = [sample.response for sample in all_samples]
-    response_embeddings = embed_texts(model, all_responses, batch_size=batch_size)
+    response_embeddings = embed_texts(model, all_responses, batch_size=batch_size, show_progress=show_progress)
 
     offset = 0
     group_sbert = []
@@ -232,7 +237,11 @@ def analyze_one(
     group_bleu_correct = []
     correct_fraction_per_group = []
 
-    for group_id in sorted(grouped):
+    group_iterator = sorted(grouped)
+    if show_progress:
+        group_iterator = tqdm(group_iterator, desc=f"Analyzing {label}", dynamic_ncols=True)
+
+    for group_id in group_iterator:
         rows = grouped[group_id]
         n = len(rows)
         group_embeddings = response_embeddings[offset : offset + n]
@@ -340,6 +349,7 @@ def main() -> None:
     parser.add_argument("--max_bleu_pairs", type=int, default=4096)
     parser.add_argument("--bleu_seed", type=int, default=0)
     parser.add_argument("--output_csv")
+    parser.add_argument("--no_progress", action="store_true", help="Disable tqdm progress bars.")
     args = parser.parse_args()
 
     specs = parse_specs(args.spec, args.preset)
@@ -355,7 +365,11 @@ def main() -> None:
     model = SentenceTransformer(model_name_or_path, cache_folder=args.hf_cache, local_files_only=True)
 
     rows = []
-    for label, path in specs:
+    spec_iterator = specs
+    if not args.no_progress and len(specs) > 1:
+        spec_iterator = tqdm(specs, desc="Comparing files", dynamic_ncols=True)
+
+    for label, path in spec_iterator:
         rows.append(
             analyze_one(
                 label=label,
@@ -365,6 +379,7 @@ def main() -> None:
                 max_bleu_pairs=args.max_bleu_pairs,
                 bleu_seed=args.bleu_seed,
                 group_key=args.group_key,
+                show_progress=not args.no_progress,
             )
         )
 

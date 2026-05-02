@@ -1310,8 +1310,18 @@ class RayPPOTrainer(object):
                 # TODO: make a canonical logger that supports various backend
                 logger.log(data=metrics, step=self.global_steps, commit=True)
 
-                if self.config.trainer.save_freq > 0 and ( is_last_step or \
-                        self.global_steps % self.config.trainer.save_freq == 0):
+                save_start_step = self.config.trainer.get('save_start_step', 0)
+                should_save = (
+                    self.config.trainer.save_freq > 0 and
+                    (
+                        is_last_step or
+                        (
+                            self.global_steps >= save_start_step and
+                            (self.global_steps - save_start_step) % self.config.trainer.save_freq == 0
+                        )
+                    )
+                )
+                if should_save:
                     with _timer('save_checkpoint', timing_raw):
                         self._save_checkpoint()
 

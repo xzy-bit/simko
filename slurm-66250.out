@@ -1,0 +1,57 @@
+Job ID: 66250
+Host: BFS9B74
+Model preset: kingbaicai_ts2
+Output json: /scratch/prj0000000224/eval_outputs_full/aime_sentence_prob/kingbaicai_ts2.json
+Started at: Fri Apr 24 08:00:10 PM +08 2026
+/home/users/astar/cfar/stuziyang/.local/lib/python3.10/site-packages/transformers/utils/hub.py:110: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
+  warnings.warn(
+Loading AIME2025-test-temp_0.6-top_p_0.95-top_k_-1.jsonl: 0it [00:00, ?it/s]Loading AIME2025-test-temp_0.6-top_p_0.95-top_k_-1.jsonl: 1549it [00:00, 11741.81it/s]Loading AIME2025-test-temp_0.6-top_p_0.95-top_k_-1.jsonl: 3710it [00:00, 16869.12it/s]Loading AIME2025-test-temp_0.6-top_p_0.95-top_k_-1.jsonl: 5791it [00:00, 18546.61it/s]Loading AIME2025-test-temp_0.6-top_p_0.95-top_k_-1.jsonl: 7680it [00:00, 18447.34it/s]
+`torch_dtype` is deprecated! Use `dtype` instead!
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:04<00:04,  4.46s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:07<00:00,  3.80s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:07<00:00,  3.90s/it]
+Scoring responses:   0%|          | 0/8 [00:00<?, ?it/s]Scoring responses:   0%|          | 0/8 [00:06<?, ?it/s]
+Traceback (most recent call last):
+  File "/home/users/astar/cfar/stuziyang/SimKO/scripts/score_aime_sentence_prob_json.py", line 269, in <module>
+    main()
+  File "/home/users/astar/cfar/stuziyang/SimKO/scripts/score_aime_sentence_prob_json.py", line 240, in main
+    points = compute_sentence_prob_points(
+  File "/home/users/astar/cfar/stuziyang/SimKO/scripts/score_aime_sentence_prob_json.py", line 177, in compute_sentence_prob_points
+    outputs = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+  File "/home/users/astar/cfar/stuziyang/.conda/envs/verl/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/users/astar/cfar/stuziyang/.conda/envs/verl/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/users/astar/cfar/stuziyang/.local/lib/python3.10/site-packages/transformers/utils/generic.py", line 918, in wrapper
+    output = func(self, *args, **kwargs)
+  File "/home/users/astar/cfar/stuziyang/.local/lib/python3.10/site-packages/transformers/models/llama/modeling_llama.py", line 459, in forward
+    outputs: BaseModelOutputWithPast = self.model(
+  File "/home/users/astar/cfar/stuziyang/.conda/envs/verl/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/users/astar/cfar/stuziyang/.conda/envs/verl/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/users/astar/cfar/stuziyang/.local/lib/python3.10/site-packages/transformers/utils/generic.py", line 1072, in wrapper
+    outputs = func(self, *args, **kwargs)
+  File "/home/users/astar/cfar/stuziyang/.local/lib/python3.10/site-packages/transformers/models/llama/modeling_llama.py", line 395, in forward
+    hidden_states = decoder_layer(
+  File "/home/users/astar/cfar/stuziyang/.local/lib/python3.10/site-packages/transformers/modeling_layers.py", line 94, in __call__
+    return super().__call__(*args, **kwargs)
+  File "/home/users/astar/cfar/stuziyang/.conda/envs/verl/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/users/astar/cfar/stuziyang/.conda/envs/verl/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/users/astar/cfar/stuziyang/.local/lib/python3.10/site-packages/transformers/utils/deprecation.py", line 172, in wrapped_func
+    return func(*args, **kwargs)
+  File "/home/users/astar/cfar/stuziyang/.local/lib/python3.10/site-packages/transformers/models/llama/modeling_llama.py", line 294, in forward
+    hidden_states, _ = self.self_attn(
+  File "/home/users/astar/cfar/stuziyang/.conda/envs/verl/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/users/astar/cfar/stuziyang/.conda/envs/verl/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/users/astar/cfar/stuziyang/.local/lib/python3.10/site-packages/transformers/utils/deprecation.py", line 172, in wrapped_func
+    return func(*args, **kwargs)
+  File "/home/users/astar/cfar/stuziyang/.local/lib/python3.10/site-packages/transformers/models/llama/modeling_llama.py", line 241, in forward
+    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+  File "/home/users/astar/cfar/stuziyang/.local/lib/python3.10/site-packages/transformers/models/llama/modeling_llama.py", line 138, in apply_rotary_pos_emb
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+  File "/home/users/astar/cfar/stuziyang/.local/lib/python3.10/site-packages/transformers/models/llama/modeling_llama.py", line 113, in rotate_half
+    return torch.cat((-x2, x1), dim=-1)
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 11.73 GiB. GPU 0 has a total capacity of 139.83 GiB of which 113.56 MiB is free. Including non-PyTorch memory, this process has 139.71 GiB memory in use. Of the allocated memory 131.19 GiB is allocated by PyTorch, and 7.86 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)

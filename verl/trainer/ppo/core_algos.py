@@ -401,8 +401,6 @@ def compute_policy_loss_simko(old_log_prob, old_log_probs_topk, log_prob, topk_l
 
     correct_mask = has_label & eos_mask_bool
 
-
-    
     negative_approx_kl = log_prob - old_log_prob
 
     ratio = torch.exp(negative_approx_kl)
@@ -437,133 +435,133 @@ def compute_policy_loss_simko(old_log_prob, old_log_probs_topk, log_prob, topk_l
     return pg_loss, pg_clipfrac, ppo_kl
 
 
-def compute_policy_loss_simko_ts2(old_log_prob, old_log_probs_topk, log_prob, topk_log_probs, entropy, advantages, eos_mask, cliprange, token_level_scores,max_token,mix_topk_coef=0.01,tau=1.0):
+def compute_policy_loss_simko_ts2(
+    old_log_prob,
+    old_log_probs_topk,
+    log_prob,
+    topk_log_probs,
+    entropy,
+    advantages,
+    eos_mask,
+    cliprange,
+    token_level_scores,
+    max_token,
+    mix_topk_coef=0.01,
+    tau=1.0,
+):
     """
-    TS2 version:
-    - 用 sparsemax support set
-    - support 内做 weighted ratio（替代 SimKO）
+    Minimal TS2 version:
+    - 保留 SimKO 原始逻辑
+    - 只把 top-k ratio 从均匀平均改成 sparsemax-support weighted aggregation
     """
+
+    correct_idx = token_level_scores.sum(-1) == 1
+    incorrect_idx = token_level_scores.sum(-1) == 0  # 保留原逻辑，虽然后面没用
+
     K = topk_log_probs.size(-1)
+    sel_cols = [i for i in range(K) if i < K]
 
-    # ---------- 基础 ratio ----------
-    log_prob_diff_bar = log_prob - old_log_prob
-    gamma = torch.exp(log_prob_diff_bar)  # (B,T)
+    if len(sel_cols) == 0:
+        topk_weighted = torch.zeros_like(log_prob)
+    else:
+        # ===== 与原 SimKO 一样：构造 top_i_terms =====
+        topk_selected = torch.stack([topk_log_probs[..., i] for i in sel_cols], dim=-1)
 
-    # ---------- topK ratio ----------
-    if K > 0:
-        log_prob_diff_topk = topk_log_probs - old_log_probs_topk
-        gamma_k = torch.exp(log_prob_diff_topk)  # (B,T,K)
+        log_prob_diff_bar = log_prob - old_log_prob          # (B,T)
+        old_topk_log_probs = old_log_probs_topk
+        log_prob_diff_topk = topk_selected - old_topk_log_probs  # (B,T,K)
 
-        # ===== TS2: sparsemax support =====
+        numerator = torch.exp(log_prob_diff_bar.detach())       # sg(gamma)
+        denominator = torch.exp(log_prob_diff_topk.detach())    # sg(gamma_k)
+
+        epsilon = 1e-8
+        top_i_terms = (
+            numerator.unsqueeze(-1) / (denominator + epsilon)
+        ) * torch.exp(log_prob_diff_topk)                       # (B,T,K)
+
+        # ===== 唯一核心变化：不用 1/K 均匀平均，而用 sparsemax support 加权 =====
         with torch.no_grad():
-            sparse_probs = sparsemax(topk_log_probs, dim=-1)  # (B,T,K)
+            sparse_probs = sparsemax(topk_selected, dim=-1)     # (B,T,K)
             support_mask = sparse_probs > 1e-9
-            support_size = support_mask.sum(dim=-1).float()  # (B,T)
 
-        # ===== TS2: weighted aggregation =====
-        weights = sparse_probs**2 # 已归一化
-        # 只保留 support 内
+        weights = sparse_probs ** 2
         weights = weights.masked_fill(~support_mask, 0.0)
         weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-8)
 
-        # 添加 sg(gamma / gamma_k) 项（importance weighting）
-        scale = gamma.detach().unsqueeze(-1) / (gamma_k.detach() + 1e-8)  # (B,T,K)
-        
-        # weighted sum: w * sg(γ/γ_k) * γ_k
-        topk_weighted = (weights * scale * gamma_k).sum(dim=-1)  # (B,T)
+        topk_weighted = (weights * top_i_terms).sum(dim=-1)     # (B,T)
 
-        # 防止数值爆炸（很重要）
-        topk_weighted = topk_weighted.clamp(max=10.0)
+    tls = token_level_scores
+    B, T = log_prob.shape
 
+    if correct_idx.dim() == 1 and correct_idx.size(0) == T:
+        correct_mask = correct_idx.unsqueeze(0).expand(B, -1)
     else:
-        topk_weighted = torch.zeros_like(gamma)
+        correct_mask = correct_idx.view(B, 1).expand(B, T)
 
-    # ---------- label / mask ----------
-    has_label = token_level_scores > 0  # (B,T)
+    tls_T = correct_mask
+    tls_T = tls_T.to(log_prob.dtype).to(log_prob.device)
+
+    has_label = tls_T > 0
 
     if eos_mask.dtype != torch.bool:
-        eos_mask_bool = (eos_mask > 0)
+        eos_mask_bool = eos_mask > 0
     else:
         eos_mask_bool = eos_mask
 
-    eos_mask_bool = eos_mask_bool.to(log_prob.device)
+    eos_mask_bool = eos_mask_bool.to(has_label.device)
 
-    correct_mask = has_label & eos_mask_bool
-
-    # ---------- entropy gating ----------
     threshold = row_quantile_masked(entropy, eos_mask_bool, q=tau)
     threshold = threshold.view(-1, 1)
 
-    w = entropy > threshold  # (B,T)
+    w = (entropy > threshold).float()
 
-    global _SIMKO_TS2_DEBUG_PRINT_COUNT
-    if K > 1 and _SIMKO_TS2_DEBUG_PRINT_COUNT < 10:
-        debug_mask = w & eos_mask_bool
-        if debug_mask.any():
-            with torch.no_grad():
-                debug_weights = weights[debug_mask]
-                top2_vals, _ = torch.topk(debug_weights, k=2, dim=-1)
-                top1_vals = top2_vals[:, 0]
-                top2_vals = top2_vals[:, 1]
-                print(
-                    "[SimKO-TS2 weights] "
-                    f"count={debug_weights.size(0)} "
-                    f"top1_mean={top1_vals.mean().item():.6f} "
-                    f"top2_mean={top2_vals.mean().item():.6f} "
-                    f"sample_top1={top1_vals[0].item():.6f} "
-                    f"sample_top2={top2_vals[0].item():.6f}"
-                )
-                _SIMKO_TS2_DEBUG_PRINT_COUNT += 1
-
-    # # --- 统计Fork Token的Support Set ---
-    # if K > 0:
-    #     fork_token_mask = w & eos_mask_bool  # 只统计高熵且有效的token
-    #     fork_support_sizes = support_size[fork_token_mask]  # 提取fork位置的support size
-        
-    #     if fork_support_sizes.numel() > 0:  # 确保有fork token
-    #         avg_support_set_size = fork_support_sizes.mean()
-    #     else:  # 如果没有fork token
-    #         avg_support_set_size = torch.tensor(0.0, device=support_size.device)
-    # else:
-    #     avg_support_set_size = torch.tensor(0.0, device=log_prob.device)
-
-    eos_mask_f = eos_mask_bool.to(log_prob.dtype)
-
-    mix_topk_pos = mix_topk_coef * w.to(log_prob.dtype) * eos_mask_f
+    mix_topk_pos = mix_topk_coef * w * eos_mask_bool
     mix_main_pos = 1.0 - mix_topk_pos
 
-    # ---------- TS2 ratio ----------
+    correct_mask = has_label & eos_mask_bool
+
+    negative_approx_kl = log_prob - old_log_prob
+
+    ratio = torch.exp(negative_approx_kl)
+    ppo_kl = verl_F.masked_mean(-negative_approx_kl, eos_mask)
+
+    ratio = torch.exp(log_prob - old_log_prob)
+
+    # ===== 唯一最终变化：原来是 (mix_topk_pos / K) * topk_sum，现在是 mix_topk_pos * topk_weighted =====
     ratio = torch.where(
         correct_mask,
-        mix_main_pos * gamma + mix_topk_pos * topk_weighted,
-        gamma
+        mix_main_pos * torch.exp(log_prob - old_log_prob)
+        + mix_topk_pos * topk_weighted,
+        ratio,
     )
 
-    # ---------- KL monitoring ----------
-    ppo_kl = verl_F.masked_mean(-log_prob_diff_bar, eos_mask)
+    if eos_mask.dtype != torch.bool:
+        eos_mask_bool = eos_mask > 0
+    else:
+        eos_mask_bool = eos_mask
 
-    # ---------- Negative Penalty（保持不变） ----------
+    eos_mask_bool = eos_mask_bool.to(entropy.device)
+
     scores = advantages
     neg_mask = (scores.sum(dim=-1) < 0).unsqueeze(-1)
-    neg_mask = (max_token > 0) & neg_mask & w
+    neg_mask = (max_token > 0) & neg_mask & (entropy > threshold)
 
     scale = torch.ones_like(scores)
     scale = scale.masked_fill(neg_mask, 1.1)
     advantages = advantages * scale
 
-    # ---------- PPO loss ----------
     pg_losses = -advantages * ratio
     pg_losses2 = -advantages * torch.clamp(
         ratio,
         1.0 - cliprange,
-        1.0 + cliprange
+        1.0 + cliprange,
     )
 
     pg_loss = verl_F.masked_mean(torch.max(pg_losses, pg_losses2), eos_mask)
 
     pg_clipfrac = verl_F.masked_mean(
         torch.gt(pg_losses2, pg_losses).float(),
-        eos_mask
+        eos_mask,
     )
 
     return pg_loss, pg_clipfrac, ppo_kl
