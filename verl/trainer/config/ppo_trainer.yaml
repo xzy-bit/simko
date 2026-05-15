@@ -193,4 +193,5 @@ trainer:
   default_hdfs_dir: null
   remove_previous_ckpt_in_save: False
   del_local_ckpt_after_load: False
+  keep_best_checkpoint_by_val_score: False
   default_local_dir: checkpoints/${trainer.project_name}/${trainer.experiment_name}

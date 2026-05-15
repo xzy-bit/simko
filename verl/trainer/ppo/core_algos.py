@@ -19,6 +19,8 @@ implement PPO
 """
 
 import numpy as np
+import json
+import os
 import torch
 from collections import defaultdict
 
@@ -26,6 +28,7 @@ import verl.utils.torch_functional as verl_F
 from entmax import sparsemax
 
 _SIMKO_TS2_DEBUG_PRINT_COUNT = 0
+_SIMKO_TS2_WEIGHT_SAMPLE_WRITTEN = False
 
 
 class AdaptiveKLController:
@@ -454,12 +457,16 @@ def compute_policy_loss_simko_ts2(
     - 保留 SimKO 原始逻辑
     - 只把 top-k ratio 从均匀平均改成 sparsemax-support weighted aggregation
     """
+    global _SIMKO_TS2_WEIGHT_SAMPLE_WRITTEN
 
     correct_idx = token_level_scores.sum(-1) == 1
     incorrect_idx = token_level_scores.sum(-1) == 0  # 保留原逻辑，虽然后面没用
 
     K = topk_log_probs.size(-1)
     sel_cols = [i for i in range(K) if i < K]
+    support_size = torch.zeros_like(log_prob, dtype=torch.long)
+    weights = None
+    weights_sq = None
 
     if len(sel_cols) == 0:
         topk_weighted = torch.zeros_like(log_prob)
@@ -483,10 +490,15 @@ def compute_policy_loss_simko_ts2(
         with torch.no_grad():
             sparse_probs = sparsemax(topk_selected, dim=-1)     # (B,T,K)
             support_mask = sparse_probs > 1e-9
+            support_size = support_mask.sum(dim=-1)             # (B,T)
 
-        weights = sparse_probs ** 2
+        weights = sparse_probs
+        weights_sq = sparse_probs ** 2
         weights = weights.masked_fill(~support_mask, 0.0)
         weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-8)
+
+        weights_sq = weights_sq.masked_fill(~support_mask, 0.0)
+        weights_sq = weights_sq / (weights_sq.sum(dim=-1, keepdim=True) + 1e-8)
 
         topk_weighted = (weights * top_i_terms).sum(dim=-1)     # (B,T)
 
@@ -514,6 +526,44 @@ def compute_policy_loss_simko_ts2(
     threshold = threshold.view(-1, 1)
 
     w = (entropy > threshold).float()
+
+    with torch.no_grad():
+        valid_mask = eos_mask_bool.to(torch.bool)
+        fork_mask = (entropy > threshold) & valid_mask
+        multi_support_mask = (support_size > 1) & valid_mask
+
+        intersection = (fork_mask & multi_support_mask).sum().float()
+        union = (fork_mask | multi_support_mask).sum().float()
+        fork_count = fork_mask.sum().float()
+        multi_support_count = multi_support_mask.sum().float()
+        valid_count = valid_mask.sum().float()
+
+        eps = 1e-8
+        extra_metrics = {
+            "actor/ts2_overlap_precision": intersection / (fork_count + eps),
+            "actor/ts2_overlap_recall": intersection / (multi_support_count + eps),
+            "actor/ts2_overlap_jaccard": intersection / (union + eps),
+            "actor/ts2_multi_support_rate": multi_support_count / (valid_count + eps),
+        }
+
+        if (not _SIMKO_TS2_WEIGHT_SAMPLE_WRITTEN) and weights is not None and weights_sq is not None:
+            high_entropy_positions = fork_mask.nonzero(as_tuple=False)[:3]
+            samples = []
+            for b, t in high_entropy_positions:
+                samples.append({
+                    "batch_index": int(b.item()),
+                    "token_index": int(t.item()),
+                    "weights": weights[b, t].detach().float().cpu().tolist(),
+                    "weights_sq": weights_sq[b, t].detach().float().cpu().tolist(),
+                })
+
+            sample_dir = os.environ.get("SIMKO_TS2_WEIGHT_SAMPLE_DIR", "ts2_weight_samples")
+            os.makedirs(sample_dir, exist_ok=True)
+            rank = os.environ.get("RANK", os.environ.get("LOCAL_RANK", "0"))
+            sample_path = os.path.join(sample_dir, f"ts2_weights_rank{rank}_pid{os.getpid()}.jsonl")
+            with open(sample_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"samples": samples}) + "\n")
+            _SIMKO_TS2_WEIGHT_SAMPLE_WRITTEN = True
 
     mix_topk_pos = mix_topk_coef * w * eos_mask_bool
     mix_main_pos = 1.0 - mix_topk_pos
@@ -564,7 +614,7 @@ def compute_policy_loss_simko_ts2(
         eos_mask,
     )
 
-    return pg_loss, pg_clipfrac, ppo_kl
+    return pg_loss, pg_clipfrac, ppo_kl, extra_metrics
 
 def compute_policy_loss(old_log_prob, log_prob, advantages, eos_mask, cliprange, token_level_scores, positive_learning_weight=None):
     """Adapted from https://github.com/huggingface/trl/blob/main/trl/trainer/ppo_trainer.py#L1122

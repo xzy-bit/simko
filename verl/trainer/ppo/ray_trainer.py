@@ -18,6 +18,7 @@ This trainer supports model-agonistic model initialization with huggingface
 import json
 import copy
 import os
+import shutil
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -533,6 +534,10 @@ class RayPPOTrainer(object):
         self.use_rm = Role.RewardModel in role_worker_mapping
         self.ray_worker_group_cls = ray_worker_group_cls
         self.validation_generations_logger = ValidationGenerationsLogger()
+        self.best_val_score = float('-inf')
+        self.best_val_step = None
+        self.best_val_metrics = None
+        self.latest_checkpoint_step = None
 
         # define KL control
         if self.use_reference_policy:
@@ -949,13 +954,17 @@ class RayPPOTrainer(object):
         local_global_step_folder = os.path.join(self.config.trainer.default_local_dir,
                                                 f'global_step_{self.global_steps}')
         actor_local_path = os.path.join(local_global_step_folder, 'actor')
+        remove_previous_ckpt = (
+            self.config.trainer.remove_previous_ckpt_in_save and
+            not self.config.trainer.get('keep_best_checkpoint_by_val_score', False)
+        )
 
         actor_remote_path = None if self.config.trainer.default_hdfs_dir is None else os.path.join(
             self.config.trainer.default_hdfs_dir, f'global_step_{self.global_steps}', 'actor')
         self.actor_rollout_wg.save_checkpoint(actor_local_path,
                                               actor_remote_path,
                                               self.global_steps,
-                                              remove_previous_ckpt=self.config.trainer.remove_previous_ckpt_in_save)
+                                              remove_previous_ckpt=remove_previous_ckpt)
 
         if self.use_critic:
             critic_local_path = os.path.join(local_global_step_folder, 'critic')
@@ -964,7 +973,7 @@ class RayPPOTrainer(object):
             self.critic_wg.save_checkpoint(critic_local_path,
                                            critic_remote_path,
                                            self.global_steps,
-                                           remove_previous_ckpt=self.config.trainer.remove_previous_ckpt_in_save)
+                                           remove_previous_ckpt=remove_previous_ckpt)
 
         # save dataloader
         dataloader_local_path = os.path.join(local_global_step_folder, 'data.pt')
@@ -976,6 +985,72 @@ class RayPPOTrainer(object):
                                                            'latest_checkpointed_iteration.txt')
         with open(local_latest_checkpointed_iteration, 'w') as f:
             f.write(str(self.global_steps))
+
+    def _get_mean_val_score(self, val_metrics):
+        score_values = [
+            value for key, value in val_metrics.items()
+            if key.startswith('val/test_score/')
+        ]
+        if not score_values:
+            return None
+        return float(np.mean(score_values))
+
+    def _should_save_best_checkpoint(self, val_metrics):
+        mean_val_score = self._get_mean_val_score(val_metrics or {})
+        if mean_val_score is None:
+            return False, None
+        if mean_val_score > self.best_val_score:
+            return True, mean_val_score
+        return False, mean_val_score
+
+    def _checkpoint_folder(self, step):
+        return os.path.join(self.config.trainer.default_local_dir, f'global_step_{step}')
+
+    def _remove_checkpoint_if_unreferenced(self, step):
+        if step is None:
+            return
+        if step in {self.latest_checkpoint_step, self.best_val_step}:
+            return
+        checkpoint_folder = self._checkpoint_folder(step)
+        if os.path.isdir(checkpoint_folder):
+            shutil.rmtree(checkpoint_folder)
+            print(f"Removed unreferenced checkpoint: {checkpoint_folder}")
+
+    def _write_checkpoint_retention_state(self, best_metrics=None):
+        if best_metrics is not None:
+            self.best_val_metrics = best_metrics
+        record = {
+            'latest_step': self.latest_checkpoint_step,
+            'best_step': self.best_val_step,
+            'best_mean_test_score': self.best_val_score,
+            'best_metrics': self.best_val_metrics,
+        }
+        record_path = os.path.join(self.config.trainer.default_local_dir, 'checkpoint_retention_state.json')
+        os.makedirs(os.path.dirname(record_path), exist_ok=True)
+        with open(record_path, 'w', encoding='utf-8') as f:
+            json.dump(record, f, cls=NumpyEncoder, indent=2)
+        best_record_path = os.path.join(self.config.trainer.default_local_dir, 'best_validation_score.json')
+        with open(best_record_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                'best_step': self.best_val_step,
+                'best_mean_test_score': self.best_val_score,
+                'metrics': self.best_val_metrics,
+            }, f, cls=NumpyEncoder, indent=2)
+
+    def _load_best_validation_state(self):
+        retention_path = os.path.join(self.config.trainer.default_local_dir, 'checkpoint_retention_state.json')
+        best_record_path = os.path.join(self.config.trainer.default_local_dir, 'best_validation_score.json')
+        state_path = retention_path if os.path.exists(retention_path) else best_record_path
+        if not os.path.exists(state_path):
+            return
+        with open(state_path, 'r', encoding='utf-8') as f:
+            best_record = json.load(f)
+        if best_record.get('latest_step') is not None:
+            self.latest_checkpoint_step = int(best_record['latest_step'])
+        self.best_val_score = float(best_record['best_mean_test_score'])
+        self.best_val_step = int(best_record['best_step'])
+        self.best_val_metrics = best_record.get('best_metrics', best_record.get('metrics'))
+        print(f"Loaded best validation checkpoint: step {self.best_val_step}, mean score {self.best_val_score}")
 
     def _load_checkpoint(self):
         if self.config.trainer.resume_mode == 'disable':
@@ -1007,6 +1082,7 @@ class RayPPOTrainer(object):
         print(f'Load from checkpoint folder: {global_step_folder}')
         # set global step
         self.global_steps = int(global_step_folder.split('global_step_')[-1])
+        self.latest_checkpoint_step = self.global_steps
 
         print(f'Setting global step to {self.global_steps}')
         print(f'Resuming from {global_step_folder}')
@@ -1065,6 +1141,7 @@ class RayPPOTrainer(object):
 
         # load checkpoint before doing anything
         self._load_checkpoint()
+        self._load_best_validation_state()
 
         # perform validation before training
         # currently, we only support validation using the reward_function.
@@ -1110,6 +1187,7 @@ class RayPPOTrainer(object):
                     )
 
                 is_last_step = self.global_steps >= self.total_training_steps
+                val_metrics = None
 
                 with _timer('step', timing_raw):
                     # generate a batch
@@ -1278,13 +1356,17 @@ class RayPPOTrainer(object):
                             is_last_step or
                             (
                                 self.global_steps >= test_start_step and
-                                self.global_steps % self.config.trainer.test_freq == 0
+                                (self.global_steps - test_start_step) % self.config.trainer.test_freq == 0
                             )
                         )
                     )
                     if should_validate:
                         with _timer('testing', timing_raw):
                             val_metrics: dict = self._validate()
+                            mean_val_score = self._get_mean_val_score(val_metrics)
+                            if mean_val_score is not None:
+                                val_metrics['val/mean_test_score'] = mean_val_score
+                                print(f"Validation mean test score: {mean_val_score}")
                             if is_last_step:
                                 last_val_metrics = val_metrics
                         metrics.update(val_metrics)
@@ -1322,8 +1404,28 @@ class RayPPOTrainer(object):
                     )
                 )
                 if should_save:
-                    with _timer('save_checkpoint', timing_raw):
-                        self._save_checkpoint()
+                    keep_best_by_score = self.config.trainer.get('keep_best_checkpoint_by_val_score', False)
+                    if keep_best_by_score:
+                        previous_latest_step = self.latest_checkpoint_step
+                        with _timer('save_checkpoint', timing_raw):
+                            self._save_checkpoint()
+                        self.latest_checkpoint_step = self.global_steps
+                        self._remove_checkpoint_if_unreferenced(previous_latest_step)
+
+                        should_save_best, mean_val_score = self._should_save_best_checkpoint(val_metrics)
+                        if should_save_best:
+                            previous_best_step = self.best_val_step
+                            self.best_val_score = mean_val_score
+                            self.best_val_step = self.global_steps
+                            self._remove_checkpoint_if_unreferenced(previous_best_step)
+                            self._write_checkpoint_retention_state(best_metrics=val_metrics)
+                            print(f"Saved new best checkpoint at step {self.global_steps} with mean val score {mean_val_score}")
+                        else:
+                            self._write_checkpoint_retention_state()
+                            print(f"Skip checkpoint at step {self.global_steps}: mean val score {mean_val_score} <= best {self.best_val_score}")
+                    else:
+                        with _timer('save_checkpoint', timing_raw):
+                            self._save_checkpoint()
 
                 if is_last_step:
                     pprint(f'Final validation metrics: {last_val_metrics}')

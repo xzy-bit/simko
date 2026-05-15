@@ -370,7 +370,7 @@ class DataParallelPPOActor(BasePPOActor):
                         entropy = entropy.detach()
                         simko_ts2 = self.config.get("simko_ts2", False)
                         if simko_ts2:
-                            pg_loss, pg_clipfrac, ppo_kl = core_algos.compute_policy_loss_simko_ts2(
+                            pg_loss, pg_clipfrac, ppo_kl, extra_metrics = core_algos.compute_policy_loss_simko_ts2(
                                 old_log_prob=old_log_prob,
                                 old_log_probs_topk=old_log_probs_topk,
                                 log_prob=log_prob,
@@ -439,6 +439,11 @@ class DataParallelPPOActor(BasePPOActor):
                         'actor/pg_clipfrac': pg_clipfrac.detach().item(),
                         'actor/ppo_kl': ppo_kl.detach().item(),
                     }
+                    if self.config.simko and self.config.get("simko_ts2", False):
+                        data.update({
+                            key: value.detach().item()
+                            for key, value in extra_metrics.items()
+                        })
                     append_to_dict(metrics, data)
 
                 grad_norm = self._optimizer_step()
